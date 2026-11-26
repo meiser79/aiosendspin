@@ -12,13 +12,16 @@ from aiosendspin.audio.codecs import PcmPassthrough
 from aiosendspin.audio.format import AudioFormat
 from aiosendspin.clock import ManualClock
 from aiosendspin.models.core import ClientStatePayload
+from aiosendspin.models.metadata import Progress
 from aiosendspin.models.source import (
     ClientStreamStartPayload,
     ClientStreamStartSource,
+    SourceMetadata,
     SourceStatePayload,
 )
 from aiosendspin.models.types import AudioCodec, BinaryMessageType, SignalState
 from aiosendspin.server.roles.source import (
+    SourceMetadataChangedEvent,
     SourceSignalChangedEvent,
     SourceStreamEndedEvent,
     SourceStreamStartedEvent,
@@ -1065,3 +1068,100 @@ def test_source_with_a_slightly_fast_clock_keeps_streaming() -> None:
         client._server.clock.advance_us(100_000)  # noqa: SLF001
 
     assert received == 3000
+
+
+def _metadata_events(client: _FakeClient) -> list[SourceMetadata | None]:
+    return [e.metadata for e in client.events if isinstance(e, SourceMetadataChangedEvent)]
+
+
+def test_client_state_surfaces_metadata_changes_only() -> None:
+    """Metadata repeats in every state, so only a different report is surfaced."""
+    role, client = _make_role()
+    so_what = SourceMetadata(timestamp=1_000, title="So What", artist="Miles Davis")
+    for _ in range(3):
+        role.on_client_state(ClientStatePayload(source=SourceStatePayload(metadata=so_what)))
+    assert _metadata_events(client) == [so_what]
+    assert role.metadata == so_what
+
+    paused = SourceMetadata(
+        timestamp=2_000,
+        title="So What",
+        artist="Miles Davis",
+        progress=Progress(track_progress=5_000, track_duration=562_000, playback_speed=0),
+    )
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload(metadata=paused)))
+    assert _metadata_events(client) == [so_what, paused]
+
+
+def test_withdrawn_metadata_is_surfaced_as_none() -> None:
+    """A source state without metadata withdraws an earlier report."""
+    role, client = _make_role()
+    so_what = SourceMetadata(timestamp=1_000, title="So What")
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload(metadata=so_what)))
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload()))
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload()))
+    assert _metadata_events(client) == [so_what, None]
+    assert role.metadata is None
+
+
+def test_a_state_without_a_source_object_keeps_the_metadata() -> None:
+    """Only the source object speaks for the source's metadata."""
+    role, client = _make_role()
+    so_what = SourceMetadata(timestamp=1_000, title="So What")
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload(metadata=so_what)))
+    role.on_client_state(ClientStatePayload())
+    assert _metadata_events(client) == [so_what]
+
+
+@pytest.mark.parametrize("teardown", ["on_deactivate", "on_disconnect"])
+def test_teardown_forgets_the_metadata(teardown: str) -> None:
+    """After a disconnect the source's next report is surfaced again."""
+    role, client = _make_role()
+    so_what = SourceMetadata(timestamp=1_000, title="So What")
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload(metadata=so_what)))
+    getattr(role, teardown)()
+    assert role.metadata is None
+    role.on_client_state(ClientStatePayload(source=SourceStatePayload(metadata=so_what)))
+    assert _metadata_events(client) == [so_what, so_what]
+
+
+def test_source_metadata_parses_from_the_wire() -> None:
+    """Every spec key of the source metadata object parses."""
+    state = SourceStatePayload.from_dict(
+        {
+            "signal": "present",
+            "metadata": {
+                "timestamp": 123,
+                "title": "Blue in Green",
+                "artist": "Miles Davis",
+                "album_artist": "Miles Davis",
+                "album": "Kind of Blue",
+                "artwork_url": "http://x.test/a.jpg",
+                "year": 1959,
+                "track": 3,
+                "progress": {
+                    "track_progress": 1_000,
+                    "track_duration": 337_000,
+                    "playback_speed": 1_000,
+                },
+            },
+        }
+    )
+    assert state.signal is SignalState.PRESENT
+    assert state.metadata is not None
+    assert state.metadata.album == "Kind of Blue"
+    assert state.metadata.track == 3
+    assert state.metadata.progress == Progress(
+        track_progress=1_000, track_duration=337_000, playback_speed=1_000
+    )
+
+
+def test_malformed_source_metadata_keeps_the_signal(caplog: pytest.LogCaptureFixture) -> None:
+    """A bad metadata object is dropped with a warning; the signal beside it still counts."""
+    with caplog.at_level(logging.WARNING):
+        state = SourceStatePayload.from_dict(
+            {"signal": "absent", "metadata": {"title": "no timestamp"}}
+        )
+    assert state.signal is SignalState.ABSENT
+    assert state.metadata is None
+    assert "malformed source metadata" in caplog.text

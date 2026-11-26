@@ -39,6 +39,7 @@ __all__ = [
     "SendspinGroup",
     "SendspinServer",
     "SignalState",
+    "SourceMetadataChangedEvent",
     "SourceSignalChangedEvent",
     "SourceStream",
     "SourceStreamEndedEvent",
@@ -74,6 +75,7 @@ from .roles.player.events import (
     VolumeChangedEvent,
 )
 from .roles.source import (
+    SourceMetadataChangedEvent,
     SourceSignalChangedEvent,
     SourceStream,
     SourceStreamEndedEvent,

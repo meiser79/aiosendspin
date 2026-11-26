@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .base import SendspinConfig, SendspinModel
+from .metadata import Progress
 from .types import AudioCodec, ClientMessage, SignalState
+
+logger = logging.getLogger(__name__)
 
 
 # DEPRECATED(spec-pr-335): remove in aiosendspin <version>
@@ -57,11 +61,48 @@ class ServerHelloSourceSupport(SendspinModel):
 
 # Client -> Server: client/state source object
 @dataclass
+class SourceMetadata(SendspinModel):
+    """What the input audio is, as the source reported it."""
+
+    timestamp: int
+    """Server clock time in microseconds at which ``progress`` was measured."""
+    title: str | None = None
+    artist: str | None = None
+    album_artist: str | None = None
+    album: str | None = None
+    artwork_url: str | None = None
+    year: int | None = None
+    track: int | None = None
+    progress: Progress | None = None
+    """Playback position of the input audio, if the source knows it."""
+
+    class Config(SendspinConfig):
+        """Config for parsing json messages."""
+
+        omit_none = True
+
+
+# Client -> Server: client/state source object
+@dataclass
 class SourceStatePayload(SendspinModel):
     """Source state reported in client/state."""
 
     signal: SignalState | None = None
     """Whether the source has input audio to offer."""
+    metadata: SourceMetadata | None = None
+    """What the input audio is; absent when the source has nothing to report."""
+
+    @classmethod
+    def __pre_deserialize__(cls, d: dict[str, Any]) -> dict[str, Any]:
+        """Drop a malformed metadata object rather than the signal beside it."""
+        metadata = d.get("metadata")
+        if metadata is not None:
+            try:
+                SourceMetadata.from_dict(metadata)
+            except Exception:  # noqa: BLE001
+                logger.warning("Ignoring malformed source metadata: %r", metadata)
+                d = {key: value for key, value in d.items() if key != "metadata"}
+        return super().__pre_deserialize__(d)
 
     class Config(SendspinConfig):
         """Config for parsing json messages."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 from aiosendspin.server.roles.registry import register_role
 
 from .events import (
+    SourceMetadataChangedEvent,
     SourceSignalChangedEvent,
     SourceStreamEndedEvent,
     SourceStreamStartedEvent,
@@ -20,6 +21,7 @@ register_role(
 )
 
 __all__ = [
+    "SourceMetadataChangedEvent",
     "SourceSignalChangedEvent",
     "SourceStream",
     "SourceStreamEndedEvent",

@@ -9,6 +9,7 @@ from aiosendspin.server.events import ClientRoleEvent
 
 if TYPE_CHECKING:
     from aiosendspin.audio.format import AudioFormat
+    from aiosendspin.models.source import SourceMetadata
     from aiosendspin.models.types import SignalState
 
     from .stream import SourceStream
@@ -35,3 +36,11 @@ class SourceSignalChangedEvent(ClientRoleEvent):
 
     signal: SignalState
     """Reported signal presence."""
+
+
+@dataclass
+class SourceMetadataChangedEvent(ClientRoleEvent):
+    """A source client reported new metadata for its input audio, or withdrew it."""
+
+    metadata: SourceMetadata | None
+    """The reported metadata; None when the source no longer reports any."""

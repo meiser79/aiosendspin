@@ -22,6 +22,7 @@ from aiosendspin.server.roles.base import Role
 from aiosendspin.util import WARN_INTERVAL_S
 
 from .events import (
+    SourceMetadataChangedEvent,
     SourceSignalChangedEvent,
     SourceStreamEndedEvent,
     SourceStreamStartedEvent,
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from aiosendspin.models.core import ClientStatePayload
-    from aiosendspin.models.source import ClientStreamStartPayload
+    from aiosendspin.models.source import ClientStreamStartPayload, SourceMetadata
     from aiosendspin.models.types import SignalState
     from aiosendspin.server.client import SendspinClient
 
@@ -79,6 +80,7 @@ class SourceV1Role(Role):
         self._last_timestamp_us = 0
         self._signal: SignalState | None = None
         self._returning_signal: SignalState | None = None
+        self._metadata: SourceMetadata | None = None
         self._decode_error_count = 0
         self._last_decode_error_log_s: float | None = None
         self._unsupported_count = 0
@@ -121,6 +123,7 @@ class SourceV1Role(Role):
         self._start_queued = False
         self._stream_wanted = False
         self._signal = None
+        self._metadata = None
 
     def on_deactivate(self) -> None:
         """End any active stream when the role leaves active_roles."""
@@ -129,6 +132,7 @@ class SourceV1Role(Role):
         self._start_queued = False
         self._stream_wanted = False
         self._signal = None
+        self._metadata = None
         super().on_deactivate()
 
     def requires_initial_state(self) -> bool:
@@ -428,11 +432,13 @@ class SourceV1Role(Role):
         return []
 
     def on_client_state(self, payload: ClientStatePayload) -> None:
-        """Send a queued start the state allows, and surface a signal change."""
+        """Send a queued start the state allows, and surface signal and metadata changes."""
         source = payload.source
         if source is not None:
             self._source_state_received = True
         self._send_queued_start()
+        if source is not None:
+            self._surface_metadata(source.metadata)
         signal = source.signal if source is not None else None
         if payload.available and not self._client.available:
             # The first signal after the client becomes available again counts as a change.
@@ -441,6 +447,20 @@ class SourceV1Role(Role):
             self._returning_signal = signal
         elif signal is not None:
             self._surface_signal(signal)
+
+    @property
+    def metadata(self) -> SourceMetadata | None:
+        """The metadata the source last reported for its input audio, if any."""
+        return self._metadata
+
+    def _surface_metadata(self, metadata: SourceMetadata | None) -> None:
+        """Emit an event when the reported metadata differs from the last report."""
+        if metadata == self._metadata:
+            return
+        self._metadata = metadata
+        self._client._signal_event(  # noqa: SLF001
+            SourceMetadataChangedEvent(metadata=metadata)
+        )
 
     def on_availability_changed(
         self,
